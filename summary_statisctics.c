@@ -1,10 +1,18 @@
 #include <stdio.h>
+#include <string.h>
 
-// NOTE: This function uses the global variables defined in Operations.c:
-// StudentRecord records[MAX_RECORDS];
-// int recordCount;
+#define MAX_RECORDS 100
 
-// Function to display summary statistics of all student records
+typedef struct {
+    int id;
+    char name[50];
+    char programme[50];
+    float mark;
+} StudentRecord;
+
+StudentRecord records[MAX_RECORDS];
+int recordCount = 0;
+
 void showSummary() {
     if (recordCount == 0) {
         printf("No records loaded.\n");
@@ -34,4 +42,15 @@ void showSummary() {
     printf("Average mark: %.2f\n", average);
     printf("Highest mark: %.2f (%s)\n", highest, records[highIndex].name);
     printf("Lowest mark: %.2f (%s)\n", lowest, records[lowIndex].name);
+}
+
+int main() {
+    // Sample test data
+    records[0] = (StudentRecord){ 2301234, "Joshua Chen", "Software Engineering", 70.5 };
+    records[1] = (StudentRecord){ 2201234, "Isaac Teo", "Computer Science", 63.4 };
+    records[2] = (StudentRecord){ 2304567, "John Levoy", "Digital Supply Chain", 85.9 };
+    recordCount = 3;
+
+    showSummary();
+    return 0;
 }
