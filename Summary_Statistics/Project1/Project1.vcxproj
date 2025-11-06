@@ -123,9 +123,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\Operations.c" />
-    <ClCompile Include="Source.cpp" />
-    <ClCompile Include="summary_statisctics.c" />
+    <ClCompile Include="..\..\summary_statisctics.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
