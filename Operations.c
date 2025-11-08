@@ -1,3 +1,13 @@
+/*
+OPERATIONS FILE
+ Purpose: Student Database Management System that is able to carry out 7 basic operations
+ 
+ Description:
+ - Loads the Database from a text file in tsv format and displays it in a formatted table
+    - Allows user to Insert, Query, Update, Delete records
+    - Saves the modified database back to the text file
+*/
+
 #include <stdio.h>
 #include <string.h>
 
@@ -113,12 +123,12 @@ void openDatabase() {
 void showAll() {
     int i;
     
-    printf("\nID\tName\t\tProgramme\tMark\n");
+    printf("\nID\tName\t\tProgramme\t\tMark\n");
     printf("----------------------------------------\n");
     
     i = 0;
     while (i < recordCount) {
-        printf("%d\t%-15s\t%-10s\t%.2f\n", // record print format and alignment
+        printf("%d\t%-15s\t%-25s\t%.1f\n",
                records[i].id, records[i].name,
                records[i].programme, records[i].mark);
         i = i + 1;
@@ -344,12 +354,20 @@ void saveDatabase() {
         printf("Error saving file!\n"); // error message if file cant be opened
         return;
     }
+    
+    fprintf(file, "Database Name: Sample-CMS\n");
+    fprintf(file, "Authors: Assistant Prof Oran Zane Devilly\n");
+    fprintf(file, "\n");
+    fprintf(file, "Table Name: StudentRecords\n");
+    fprintf(file, "ID\tName\t\tProgramme\t\tMark\n");
 
     i = 0;
-    while (i < recordCount) { // loop to write each record in the file
-        fprintf(file, "%d,%s,%s,%.2f\n",
-                records[i].id, records[i].name,
-                records[i].programme, records[i].mark);
+    while (i < recordCount) {
+        fprintf(file, "%d\t%-15s\t%-23s\t%.1f\n", // fixed formatting to follow sample
+                records[i].id, 
+                records[i].name,
+                records[i].programme, 
+                records[i].mark);
         i = i + 1;
     }
     
