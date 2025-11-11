@@ -78,3 +78,5 @@ int main() {
     showSummary();
     return 0;
 }
+
+// End of file: summary_statistics.c
