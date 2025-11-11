@@ -1,142 +1,388 @@
+/*
+OPERATIONS FILE
+ Purpose: Student Database Management System that is able to carry out 7 basic operations
+ 
+ Description:
+ - Loads the Database from a text file in tsv format and displays it in a formatted table
+    - Allows user to Insert, Query, Update, Delete records
+    - Saves the modified database back to the text file
+*/
+
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
-#include <ctype.h>
+#include <time.h>  /* for audit timestamps */
 
-#define FILENAME "Sample-CMS.txt"
 #define MAX_RECORDS 100
-#define MAX_NAME 40
-#define MAX_PROG 40
-#define HSIZE 257
+#define MAX_NAME_LEN 40
+#define MAX_PROG_LEN 40
+#define FILENAME "Sample-CMS.txt" // to load and save database called Sample-CMS.txt
 
-typedef struct { int id; char name[MAX_NAME]; char programme[MAX_PROG]; float mark; } Rec;
+typedef struct { // database stuff, struct helps to group different data types
+    int id;
+    char name[MAX_NAME_LEN];
+    char programme[MAX_PROG_LEN];
+    float mark;
+} StudentRecord;
 
-static Rec recs[MAX_RECORDS]; static int nrec = 0;
-/* hash: ID -> index */
-static int hkey[HSIZE]; /* 0 empty, -1 tombstone, else id */
-static int hpos[HSIZE];
+StudentRecord records[MAX_RECORDS];
+int recordCount = 0; // records tracker
 
-static unsigned hmix(unsigned x){ x^=x>>16; x*=0x7feb352d; x^=x>>15; x*=0x846ca68b; x^=x>>16; return x; }
-static void hclear(void){ for(int i=0;i<HSIZE;i++){hkey[i]=0; hpos[i]=-1;} }
-static int hput(int id,int pos){ unsigned h=hmix((unsigned)id)%HSIZE; for(int i=0;i<HSIZE;i++,h=(h+1)%HSIZE) if(hkey[h]==0||hkey[h]==-1||hkey[h]==id){hkey[h]=id;hpos[h]=pos;return 1;} return 0; }
-static int hget(int id,int*pos){ unsigned h=hmix((unsigned)id)%HSIZE; for(int i=0;i<HSIZE;i++,h=(h+1)%HSIZE){ if(hkey[h]==0) return 0; if(hkey[h]==id){ *pos=hpos[h]; return 1; } } return 0; }
-static void hbuild(void){ hclear(); for(int i=0;i<nrec;i++) hput(recs[i].id,i); }
+/* ===== Forward declarations for enhancement helpers (implemented at bottom) ===== */
+void fl_audit_open(void);
+void fl_audit_close(void);
+void fl_audit(const char* op, const StudentRecord* before_or_null,
+              const StudentRecord* after_or_null, const char* status);
 
-/* audit */
-static FILE* auditf=NULL;
-static void audit_open(void){ if(!auditf) auditf=fopen("audit_log.txt","a"); }
-static void audit_close(void){ if(auditf){ fclose(auditf); auditf=NULL; } }
-static void ts(char*buf,size_t n){ time_t t=time(NULL); struct tm*m=localtime(&t); strftime(buf,n,"%Y-%m-%d %H:%M:%S",m); }
-static void fmt(const Rec*s,char*out,size_t n){ if(!s){snprintf(out,n,"(null)");return;} snprintf(out,n,"{ID=%d,Name=\"%s\",Prog=\"%s\",Mark=%.2f}",s->id,s->name,s->programme,s->mark); }
-static void audit(const char*op,const Rec*b,const Rec*a,const char*st){ if(!auditf) return; char T[32],B[160],A[160]; ts(T,32); fmt(b,B,160); fmt(a,A,160); fprintf(auditf,"[%s] %s %s -> %s : %s\n",T,op,B,A,st); fflush(auditf); }
+void fl_index_build(const StudentRecord* records, int count);
+int  fl_index_get(int id, int* out_pos);
+void fl_index_put(int id, int pos);
+void fl_index_rebuild(const StudentRecord* records, int count);
 
-/* perf */
-typedef struct { unsigned long c; double ms; } P; static P p_open,p_show,p_ins,p_qry,p_upd,p_del,p_save,p_stat;
-static clock_t t0; static P* cur=NULL;
-static void begin(P* p){ cur=p; t0=clock(); }
-static void endok(void){ if(!cur) return; cur->c++; cur->ms+=1000.0*(clock()-t0)/CLOCKS_PER_SEC; cur=NULL; }
-static void stats(void){
-    printf("\nOP      COUNT   TOTAL(ms)  AVG(ms)\n");
-    #define PR(n,p) printf("%-6s %6lu   %9.2f  %7.2f\n",n,(unsigned long)(p).c,(p).ms,(p).c?(p).ms/(p).c:0.0)
-    PR("OPEN",p_open); PR("SHOW",p_show); PR("INSERT",p_ins); PR("QUERY",p_qry);
-    PR("UPDATE",p_upd); PR("DELETE",p_del); PR("SAVE",p_save); PR("STATS",p_stat);
-    #undef PR
+/* ============================== Original Interface ============================== */
+void openDatabase();
+void showAll();
+void insertRecord();
+void queryRecord();
+void updateRecord();
+void deleteRecord();
+void saveDatabase();
+
+void showMenu() {
+    printf("\n=== Student Database Management System ===\n");
+    printf("1. Open Database\n");
+    printf("2. Show All Records\n");
+    printf("3. Insert Record\n");
+    printf("4. Query Record\n");
+    printf("5. Update Record\n");
+    printf("6. Delete Record\n");
+    printf("7. Save Database\n");
+    printf("Enter your choice (1-7): ");
 }
 
-/* I/O helpers */
-static void rstrip(char*s){ size_t L=strlen(s); while(L&& (s[L-1]=='\n'||s[L-1]=='\r')) s[--L]=0; }
+int main() {
+    int choice;
 
-static void openDB(void){
-    begin(&p_open);
-    FILE* f=fopen(FILENAME,"r"); if(!f){ puts("Error opening file!"); audit("OPEN",NULL,NULL,"FAIL"); endok(); return; }
-    nrec=0; char line[256];
-    /* skip until header row with columns */
-    while(fgets(line,256,f)){ if(strstr(line,"ID")&&strstr(line,"Name")&&strstr(line,"Programme")&&strstr(line,"Mark")) break; }
-    while(nrec<MAX_RECORDS && fgets(line,256,f)){
-        int id; char name[MAX_NAME], prog[MAX_PROG]; float mark; 
-        int n=sscanf(line,"%d\t%39[^\t]\t%39[^\t]\t%f",&id,name,prog,&mark);
-        if(n==4){ recs[nrec].id=id; strncpy(recs[nrec].name,name,MAX_NAME-1); recs[nrec].name[MAX_NAME-1]=0;
-                  strncpy(recs[nrec].programme,prog,MAX_PROG-1); recs[nrec].programme[MAX_PROG-1]=0; recs[nrec].mark=mark; nrec++; }
+    /* open audit log once */
+    fl_audit_open();
+    
+    while (1) { // (1) for infinitely looping menu
+        showMenu();
+        if (scanf("%d", &choice) != 1) {
+            int ch; while ((ch = getchar()) != '\n' && ch != EOF) {}
+            continue;
+        }
+        getchar();
+
+        if (choice == 1) {
+            openDatabase();
+        }
+        else if (choice == 2) {
+            showAll();
+        }
+        else if (choice == 3) {
+            insertRecord();
+        }
+        else if (choice == 4) {
+            queryRecord();
+        }
+        else if (choice == 5) {
+            updateRecord();
+        }
+        else if (choice == 6) {
+            deleteRecord();
+        }
+        else if (choice == 7) {
+            saveDatabase();
+        }
+        else {
+            printf("Invalid choice! Please enter a number between 1 and 7.\n");
+        }
     }
-    fclose(f); hbuild(); printf("Loaded %d records from '%s'\n",nrec,FILENAME); audit("OPEN",NULL,NULL,"SUCCESS"); endok();
-}
 
-static void showAll(void){
-    begin(&p_show);
-    printf("\nID\tName\t\tProgramme\t\tMark\n-----------------------------------------------\n");
-    for(int i=0;i<nrec;i++) printf("%d\t%-15s\t%-16s\t%.2f\n",recs[i].id,recs[i].name,recs[i].programme,recs[i].mark);
-    endok();
-}
-
-static void insertRec(void){
-    begin(&p_ins);
-    if(nrec>=MAX_RECORDS){ puts("DB full."); audit("INSERT",NULL,NULL,"FAIL(FULL)"); endok(); return; }
-    Rec s={0}; int pos;
-    printf("Enter ID: "); scanf("%d",&s.id); getchar();
-    if(hget(s.id,&pos)){ puts("ID exists."); audit("INSERT",NULL,NULL,"FAIL(DUP)"); endok(); return; }
-    printf("Enter name: "); fgets(s.name,MAX_NAME,stdin); rstrip(s.name);
-    printf("Enter programme: "); fgets(s.programme,MAX_PROG,stdin); rstrip(s.programme);
-    printf("Enter mark: "); scanf("%f",&s.mark);
-    recs[nrec]=s; hput(s.id,nrec); nrec++; puts("Inserted."); audit("INSERT",NULL,&s,"SUCCESS"); endok();
-}
-
-static void queryRec(void){
-    begin(&p_qry);
-    int id,pos; printf("Enter ID: "); scanf("%d",&id);
-    if(!hget(id,&pos)){ puts("Not found."); endok(); return; }
-    Rec*r=&recs[pos]; printf("\nID:%d\nName:%s\nProgramme:%s\nMark:%.2f\n",r->id,r->name,r->programme,r->mark); endok();
-}
-
-static void updateRec(void){
-    begin(&p_upd);
-    int id,pos; char buf[128]; printf("Enter ID: "); scanf("%d",&id); getchar();
-    if(!hget(id,&pos)){ puts("Not found."); endok(); return; }
-    Rec before=recs[pos];
-    printf("New name (enter to skip): "); fgets(buf,128,stdin); if(buf[0]!='\n'){ rstrip(buf); strncpy(recs[pos].name,buf,MAX_NAME-1); recs[pos].name[MAX_NAME-1]=0; }
-    printf("New programme (enter to skip): "); fgets(buf,128,stdin); if(buf[0]!='\n'){ rstrip(buf); strncpy(recs[pos].programme,buf,MAX_PROG-1); recs[pos].programme[MAX_PROG-1]=0; }
-    printf("New mark (-1 to skip): "); float m; scanf("%f",&m); if(m>=0) recs[pos].mark=m;
-    puts("Updated."); audit("UPDATE",&before,&recs[pos],"SUCCESS"); endok();
-}
-
-static void deleteRec(void){
-    begin(&p_del);
-    int id,pos; printf("Enter ID: "); scanf("%d",&id);
-    if(!hget(id,&pos)){ puts("Not found."); endok(); return; }
-    Rec before=recs[pos];
-    printf("Confirm delete (y/n): "); char c; scanf(" %c",&c); if(c!='y'&&c!='Y'){ puts("Cancelled."); endok(); return; }
-    for(int i=pos;i<nrec-1;i++) recs[i]=recs[i+1]; nrec--; hbuild(); puts("Deleted."); audit("DELETE",&before,NULL,"SUCCESS"); endok();
-}
-
-static void saveDB(void){
-    begin(&p_save);
-    FILE*f=fopen(FILENAME,"w"); if(!f){ puts("Save error."); audit("SAVE",NULL,NULL,"FAIL"); endok(); return; }
-    fprintf(f,"Table Name: StudentRecords\n");
-    fprintf(f,"ID\tName\t\tProgramme\t\tMark\n");
-    for(int i=0;i<nrec;i++) fprintf(f,"%d\t%s\t%s\t%.2f\n",recs[i].id,recs[i].name,recs[i].programme,recs[i].mark);
-    fclose(f); puts("Saved."); audit("SAVE",NULL,NULL,"SUCCESS"); endok();
-}
-
-static void menu(void){
-    printf("\n1.Open  2.Show  3.Insert  4.Query  5.Update  6.Delete  7.Save  8.Stats  9.Exit\n> ");
-}
-
-int main(void){
-    audit_open();
-    while(1){
-        int ch; menu(); if(scanf("%d",&ch)!=1){ int c; while((c=getchar())!='\n'&&c!=EOF){} continue; }
-        int c; while((c=getchar())!='\n'&&c!=EOF){}
-        if(ch==1) openDB();
-        else if(ch==2) showAll();
-        else if(ch==3) insertRec();
-        else if(ch==4) queryRec();
-        else if(ch==5) updateRec();
-        else if(ch==6) deleteRec();
-        else if(ch==7) saveDB();
-        else if(ch==8){ begin(&p_stat); stats(); endok(); }
-        else if(ch==9) break;
-        else puts("Invalid.");
-    }
-    audit_close();
+    /* (unreachable in current loop, but safe if you later add an Exit) */
+    fl_audit_close();
     return 0;
 }
+
+/* OPERATION 1 OPEN DATABASE -> Opens the database file and loads the records
+   NOTE: tolerant loader — reads whole file and only counts lines that parse 4 fields */
+void openDatabase() {
+    FILE *fp;
+    char line[256];
+    int readResult;
+    
+    fp = fopen(FILENAME, "r"); // file pointer
+    
+    if (fp == NULL) {
+        printf("Error opening file!\n"); // error message
+        fl_audit("OPEN", NULL, NULL, "FAIL");
+        return;
+    }
+    
+    recordCount = 0; // clears previous records first before loading
+    
+    /* Read all lines; ignore headers/blank lines; only accept rows with 4 fields */
+    while (recordCount < MAX_RECORDS) {
+        if (fgets(line, sizeof(line), fp) == NULL) {
+            break;
+        }
+
+        readResult = sscanf(line, "%d\t%[^\t]\t%[^\t]\t%f", // (id>name>prog>mark)
+                   &records[recordCount].id,
+                   records[recordCount].name,
+                   records[recordCount].programme,
+                   &records[recordCount].mark);
+        
+        if (readResult == 4) { // ensures all fields are properly read
+            recordCount = recordCount + 1;
+        }
+        /* else: it was likely a header or malformed line; safely ignored */
+    }
+    
+    fclose(fp);
+
+    /* Build fast lookup index for O(1) ID-based operations */
+    fl_index_build(records, recordCount);
+
+    printf("Successfully loaded %d records from '%s'\n\n", recordCount, FILENAME);
+    fl_audit("OPEN", NULL, NULL, "SUCCESS");
+}
+
+/* OPERATION 2 SHOW ALL -> Displays the student records in a formatted table */
+void showAll() {
+    int i;
+    
+    printf("\nID\tName\t\tProgramme\t\tMark\n");
+    printf("----------------------------------------\n");
+    
+    i = 0;
+    while (i < recordCount) {
+        printf("%d\t%-15s\t%-25s\t%.1f\n",
+               records[i].id, records[i].name,
+               records[i].programme, records[i].mark);
+        i = i + 1;
+    }
+}
+
+/* OPERATION 3 INSERT RECORD -> Allows user to add new student records */
+void insertRecord() {
+    int newId;
+    int i;
+    int j;
+    int pos; /* for fast duplicate check */
+    
+    if (recordCount >= MAX_RECORDS) {
+        printf("Error: database full.\n");
+        fl_audit("INSERT", NULL, NULL, "FAIL(FULL)");
+        return;
+    }
+
+    printf("Enter student ID: ");
+    scanf("%d", &newId);
+    getchar();
+    
+    /* Fast duplicate check via hash index */
+    if (fl_index_get(newId, &pos)) {
+        printf("Error: Student ID already exists. Insertion cancelled.\n");
+        fl_audit("INSERT", NULL, NULL, "FAIL(DUPLICATE)");
+        return;
+    }
+    
+    records[recordCount].id = newId; // stores new ID to next slot
+
+    printf("Enter name: ");
+    fgets(records[recordCount].name, MAX_NAME_LEN, stdin);
+    
+    i = 0; // removal of newline character when user presses enter
+    while (records[recordCount].name[i] != '\0') {
+        if (records[recordCount].name[i] == '\n') {
+            records[recordCount].name[i] = '\0';
+            break;
+        }
+        i = i + 1;
+    }
+
+    printf("Enter programme: ");
+    fgets(records[recordCount].programme, MAX_PROG_LEN, stdin);
+    
+    i = 0;
+    while (records[recordCount].programme[i] != '\0') {
+        if (records[recordCount].programme[i] == '\n') {
+            records[recordCount].programme[i] = '\0';
+            break;
+        }
+        i = i + 1;
+    }
+
+    printf("Enter mark: ");
+    scanf("%f", &records[recordCount].mark);
+
+    /* add to fast index (ID -> current position) */
+    fl_index_put(newId, recordCount);
+
+    /* audit with after-values */
+    fl_audit("INSERT", NULL, &records[recordCount], "SUCCESS");
+
+    recordCount = recordCount + 1; // +1 record count if successful
+    printf("Record added successfully!\n");
+}
+
+/* OPERATION 4 QUERY RECORD -> Allows the user to search for a student record by ID */
+void queryRecord() {
+    int searchId;
+    int pos;
+    
+    printf("Enter student ID to search: ");
+    scanf("%d", &searchId);
+
+    /* Fast lookup instead of O(n) scan */
+    if (!fl_index_get(searchId, &pos)) {
+        printf("Record not found.\n");
+        return;
+    }
+    
+    printf("\nFound Record:\n");
+    printf("ID: %d\nName: %s\nProgramme: %s\nMark: %.2f\n",
+           records[pos].id, records[pos].name,
+           records[pos].programme, records[pos].mark);
+}
+
+/* OPERATION 5 UPDATE RECORD -> Allows the user to update a student record */
+void updateRecord() {
+    int searchId;
+    int i;
+    int j;
+    int pos;
+    char input[MAX_NAME_LEN];
+    float newMark;
+    
+    printf("Enter student ID to update: ");
+    scanf("%d", &searchId);
+    getchar();
+
+    /* Fast lookup to find the position */
+    if (!fl_index_get(searchId, &pos)) {
+        printf("Record not found.\n");
+        return;
+    }
+
+    /* snapshot for audit (before) */
+    {
+        StudentRecord before = records[pos];
+
+        printf("Enter new name (or press enter to skip): ");
+        fgets(input, MAX_NAME_LEN, stdin);
+        
+        if (input[0] != '\n') { //if user did not press enter, update name
+            j = 0;
+            while (input[j] != '\0') { //if user pressed enter, remove newline
+                if (input[j] == '\n') {
+                    input[j] = '\0';
+                    break;
+                }
+                j = j + 1;
+            }
+            
+            j = 0; // copys the new string to the record
+            while (input[j] != '\0') {
+                records[pos].name[j] = input[j];
+                j = j + 1;
+            }
+            records[pos].name[j] = '\0';
+        }
+
+        printf("Enter new programme (or press enter to skip): ");
+        fgets(input, MAX_PROG_LEN, stdin);
+        
+        if (input[0] != '\n') {
+            j = 0;
+            while (input[j] != '\0') {
+                if (input[j] == '\n') {
+                    input[j] = '\0';
+                    break;
+                }
+                j = j + 1;
+            }
+            
+            j = 0;
+            while (input[j] != '\0') {
+                records[pos].programme[j] = input[j];
+                j = j + 1;
+            }
+            records[pos].programme[j] = '\0';
+        }
+
+        printf("Enter new mark (or -1 to skip): ");
+        scanf("%f", &newMark);
+        
+        if (newMark >= 0) {
+            records[pos].mark = newMark;
+        }
+
+        printf("Record updated successfully.\n");
+
+        /* audit with before/after */
+        fl_audit("UPDATE", &before, &records[pos], "SUCCESS");
+    }
+}
+
+/* OPERATION 6 DELETE RECORD -> Allows the user to delete a student record through ID */
+void deleteRecord() {
+    int searchId;
+    int i;
+    int j;
+    int pos;
+    char confirm;
+    
+    printf("Enter student ID to delete: ");
+    scanf("%d", &searchId);
+
+    /* Fast lookup to find the position */
+    if (!fl_index_get(searchId, &pos)) {
+        printf("Record not found.\n");
+        return;
+    }
+            
+    printf("Are you sure you want to delete this record? (y/n): "); // delete confirmation
+    scanf(" %c", &confirm);
+            
+    if (confirm == 'y' || confirm == 'Y') {
+        /* audit before deletion */
+        fl_audit("DELETE", &records[pos], NULL, "SUCCESS");
+
+        j = pos;
+        while (j < recordCount - 1) { // shift records after deletion
+            records[j] = records[j + 1];
+            j = j + 1;
+        }
+        recordCount = recordCount - 1;
+
+        /* rebuild index because all positions after 'pos' shifted left by 1 */
+        fl_index_rebuild(records, recordCount);
+
+        printf("Record deleted successfully.\n");
+    }
+    else {
+        printf("Deletion cancelled.\n");
+    }
+}
+
+/* OPERATION 7 SAVE DATABASE -> Saves current records to the database's .txt file */
+void saveDatabase() {
+    FILE *file;
+    int i;
+    
+    file = fopen(FILENAME, "w"); // open file for internal editing
+    
+    if (file == NULL) {
+        printf("Error saving file!\n"); // error message if file cant be opened
+        fl_audit("SAVE", NULL, NULL, "FAIL");
+        return;
+    }
+    
+    fprintf(file, "Database Name: Sample-CMS\n");
+    fprintf(file, "Authors: Assistant Prof Oran Zane Devilly\n");
+    fprintf(file, "\n");
+    fprintf(file, "Table Name: StudentRecords\n");
+    fprintf(file,
