@@ -126,7 +126,7 @@
     <Text Include="..\..\Sample-CMS.txt" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\Operations.c" />
+    <ClCompile Include="..\..\Operations (2).c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
