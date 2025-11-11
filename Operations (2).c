@@ -37,6 +37,8 @@ void updateRecord();
 void deleteRecord();
 void saveDatabase();
 void sortRecords();
+void showSummary();
+
 
 void showMenu() {
     printf("\n=== Student Database Management System ===\n");
@@ -83,7 +85,7 @@ int main() {
         }
         else if (choice == 8) {
             sortRecords();
-
+        }
         else if (choice == 9) {
             showSummary();
         }
@@ -430,12 +432,12 @@ void sortRecords() {
         strncpy(up, line, sizeof up - 1); up[sizeof up - 1] = '\0';
         strtoupper(up);
         if (strcmp(up, "EXIT") == 0 || strcmp(up, "QUIT") == 0) break;
-        char *pos = strstr(up, "SORT BY");
+        char* pos = strstr(up, "SORT BY");
         if (!pos) { puts("Unrecognized command. Use 'SHOW ALL SORT BY ID|MARK [DESC]'."); continue; }
         pos += strlen("SORT BY");
         while (isspace((unsigned char)*pos)) ++pos;
-        char field[16] = {0}, order[16] = {0};
-        char *tok = strtok(pos, " \t[]"); if (tok) { strncpy(field, tok, sizeof field - 1); field[sizeof field - 1] = '\0'; }
+        char field[16] = { 0 }, order[16] = { 0 };
+        char* tok = strtok(pos, " \t[]"); if (tok) { strncpy(field, tok, sizeof field - 1); field[sizeof field - 1] = '\0'; }
         tok = strtok(NULL, " \t[]"); if (tok) { strncpy(order, tok, sizeof order - 1); order[sizeof order - 1] = '\0'; }
         int byId = (strcmp(field, "ID") == 0);
         int byMark = (strcmp(field, "MARK") == 0);
@@ -448,6 +450,7 @@ void sortRecords() {
         if (desc) reverse_records_inplace();
         showAll();
     }
+}
 
     // OPERATION 9: SHOW SUMMARY STATISTICS
    // Calculates total students, average, highest, and lowest marks 
@@ -481,6 +484,4 @@ void sortRecords() {
         printf("Highest mark: %.2f (%s)\n", highest, records[highIndex].name);
         printf("Lowest mark: %.2f (%s)\n", lowest, records[lowIndex].name);
     }
-
-}
 
