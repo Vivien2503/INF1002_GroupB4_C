@@ -90,10 +90,7 @@ static Student *load_students(const char *filename, size_t *out_count) {
     size_t cap = 0, cnt = 0;
     char line[MAX_LINE];
 
-    /* Ignore the first 4 header lines in the database file */
-    for (int i = 0; i < 4 && fgets(line, sizeof(line), f); ++i) {
-        /* discard */
-    }
+    for (int i = 0; i < 4 && fgets(line, sizeof(line), f); ++i) { }
 
     while (fgets(line, sizeof(line), f)) {
         trim_newline(line);
@@ -209,6 +206,7 @@ static void strtoupper_inplace(char *s) {
     for (; *s; ++s) *s = (char)toupper((unsigned char)*s);
 }
 
+// OPERATION 7 SORT -> SORTING OF STUDENT RECORDS (ASCENDING/DESCENDING)
 int main(int argc, char **argv) {
     const char *filename = "Sample-CMS.txt";
     if (argc >= 2) filename = argv[1];
