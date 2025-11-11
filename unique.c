@@ -385,4 +385,107 @@ void saveDatabase() {
     fprintf(file, "Authors: Assistant Prof Oran Zane Devilly\n");
     fprintf(file, "\n");
     fprintf(file, "Table Name: StudentRecords\n");
-    fprintf(file,
+    fprintf(file, "ID\tName\t\tProgramme\t\tMark\n");
+
+    i = 0;
+    while (i < recordCount) {
+        fprintf(file, "%d\t%-15s\t%-23s\t%.1f\n", // fixed formatting to follow sample
+                records[i].id, 
+                records[i].name,
+                records[i].programme, 
+                records[i].mark);
+        i = i + 1;
+    }
+    
+    fclose(file);
+    printf("Database saved successfully.\n");
+    fl_audit("SAVE", NULL, NULL, "SUCCESS");
+}
+
+/* =============================================================================
+   Enhancement Section (kept together at the bottom, as requested)
+   - (2) Fast Lookup: open-addressing hash index (ID -> array index)
+   - (1) Audit Log: append-only file with timestamps and before/after snapshots
+   ========================================================================== */
+
+/* --------------------------- Fast Lookup (Hash) --------------------------- */
+#ifndef HSIZE
+#define HSIZE 257  /* prime; fine for <=100 rows */
+#endif
+
+typedef struct { int key; int pos; } FL_Slot;
+static FL_Slot fl_table[HSIZE];
+
+static unsigned fl_hmix(unsigned x){
+    x ^= x >> 16; x *= 0x7feb352d;
+    x ^= x >> 15; x *= 0x846ca68b;
+    x ^= x >> 16; return x;
+}
+static void fl_clear(void){
+    int i; for(i=0;i<HSIZE;i++){ fl_table[i].key=0; fl_table[i].pos=-1; }
+}
+
+void fl_index_build(const StudentRecord* arr, int count){
+    fl_clear();
+    for (int i=0;i<count;i++){
+        unsigned h = fl_hmix((unsigned)arr[i].id) % HSIZE;
+        for (int step=0; step<HSIZE; step++, h=(h+1)%HSIZE){
+            if (fl_table[h].key==0 || fl_table[h].key==arr[i].id){
+                fl_table[h].key = arr[i].id;
+                fl_table[h].pos = i;
+                break;
+            }
+        }
+    }
+}
+int fl_index_get(int id, int* out_pos){
+    unsigned h = fl_hmix((unsigned)id) % HSIZE;
+    for (int step=0; step<HSIZE; step++, h=(h+1)%HSIZE){
+        if (fl_table[h].key == 0) return 0;
+        if (fl_table[h].key == id){ if(out_pos) *out_pos = fl_table[h].pos; return 1; }
+    }
+    return 0;
+}
+void fl_index_put(int id, int pos){
+    unsigned h = fl_hmix((unsigned)id) % HSIZE;
+    for (int step=0; step<HSIZE; step++, h=(h+1)%HSIZE){
+        if (fl_table[h].key == 0 || fl_table[h].key == id){
+            fl_table[h].key = id;
+            fl_table[h].pos = pos;
+            return;
+        }
+    }
+}
+void fl_index_rebuild(const StudentRecord* arr, int count){
+    fl_index_build(arr, count);
+}
+
+/* ------------------------------- Audit Log -------------------------------- */
+static FILE* fl_audit_fp = NULL;
+
+void fl_audit_open(void){
+    if (!fl_audit_fp) fl_audit_fp = fopen("audit_log.txt","a");
+}
+void fl_audit_close(void){
+    if (fl_audit_fp){ fclose(fl_audit_fp); fl_audit_fp = NULL; }
+}
+static void fl_ts_now(char* buf, size_t n){
+    time_t t = time(NULL);
+    struct tm* m = localtime(&t);
+    strftime(buf, n, "%Y-%m-%d %H:%M:%S", m);
+}
+static void fl_fmt_rec(const StudentRecord* s, char* out, size_t n){
+    if (!s){ snprintf(out, n, "(null)"); return; }
+    snprintf(out, n, "{ID=%d,Name=\"%s\",Programme=\"%s\",Mark=%.2f}",
+             s->id, s->name, s->programme, s->mark);
+}
+void fl_audit(const char* op, const StudentRecord* before_or_null,
+              const StudentRecord* after_or_null, const char* status){
+    if (!fl_audit_fp) return;
+    char T[32], B[160], A[160];
+    fl_ts_now(T, sizeof T);
+    fl_fmt_rec(before_or_null, B, sizeof B);
+    fl_fmt_rec(after_or_null,  A, sizeof A);
+    fprintf(fl_audit_fp, "[%s] %s %s -> %s : %s\n", T, op, B, A, status);
+    fflush(fl_audit_fp);
+}
