@@ -457,8 +457,12 @@ void sortRecords() {
 
     void showSummary() {
         if (recordCount == 0) {
-            printf("No records found.\n");
-            return;
+            printf("No records loaded. Opening database...\n");
+            openDatabase();
+            if (recordCount == 0) {
+                printf("Still no records found.\n");
+                return;
+            }
         }
 
         float total = 0;
