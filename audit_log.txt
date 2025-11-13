@@ -1,0 +1,3 @@
+[2025-11-11 18:24:49] INSERT (null) -> {ID=2,Name="12",Programme="",Mark=2.00} : SUCCESS
+[2025-11-11 18:24:53] INSERT (null) -> {ID=3,Name="3",Programme="3",Mark=3.00} : SUCCESS
+[2025-11-11 18:24:54] INSERT (null) -> (null) : FAIL(DUPLICATE)
