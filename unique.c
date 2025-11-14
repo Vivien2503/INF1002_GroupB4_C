@@ -508,9 +508,8 @@ static void strtoupper(char* s) { for (; *s; ++s) *s = (char)toupper((unsigned c
 // Operation 8: Sort Student Records (ASCENDING/DESCENDING)
 void sortRecords()
 {
-    /* Ensure data is loaded */
     if (recordCount == 0) {
-        printf("No records loaded. Attempting to open database...\n");
+		printf("No records loaded. Attempting to open database...\n");    //Ensure data is loaded
         openDatabase();
         if (recordCount == 0) {
             return;
@@ -535,33 +534,29 @@ void sortRecords()
         if (input[0] == '\0') {
             continue;
         }
-
-        /* Normalize the command to uppercase */
-        strncpy(normalized, input, sizeof(normalized));
+ 
+        strncpy(normalized, input, sizeof(normalized));      // Normalize the command to uppercase
         normalized[sizeof(normalized) - 1] = '\0';
         strtoupper(normalized);
 
-        /* Exit option */
-        if (!strcmp(normalized, "EXIT") || !strcmp(normalized, "QUIT")) {
+        if (!strcmp(normalized, "EXIT") || !strcmp(normalized, "QUIT")) {   // Exit option
             break;
         }
 
-        /* Must contain SORT BY */
-        char* sortPos = strstr(normalized, "SORT BY");
+        char* sortPos = strstr(normalized, "SORT BY");                    // Must contain SORT BY
         if (!sortPos) {
             puts("Unrecognized command. Use: SHOW ALL SORT BY ID|MARK [DESC].");
             continue;
         }
 
-        /* Move pointer to field token */
-        sortPos += strlen("SORT BY");
+        sortPos += strlen("SORT BY");                                   // Move pointer to field token
         while (isspace((unsigned char)*sortPos)) sortPos++;
 
         char field[16] = { 0 };
         char order[16] = { 0 };
 
-        /* Extract field and order */
-        char* token = strtok(sortPos, " \t[]");
+        
+        char* token = strtok(sortPos, " \t[]");                       // Extract field and order
         if (token) strncpy(field, token, sizeof(field) - 1);
 
         token = strtok(NULL, " \t[]");
@@ -577,26 +572,23 @@ void sortRecords()
 
         int descending = (!strcmp(order, "DESC"));
 
-        /* Perform sorting */
-        qsort(records, recordCount, sizeof(records[0]),
+        
+        qsort(records, recordCount, sizeof(records[0]),           // Perform sorting
             sortById ? cmp_record_id_asc : cmp_record_mark_asc);
 
         if (descending) {
             reverse_records_inplace();
         }
 
-        /* Rebuild index after ordering */
-        index_rebuild(records, recordCount);
+        index_rebuild(records, recordCount);                   // Rebuild index after ordering
 
-        /* Write audit log */
-        char status[32];
+        char status[32];                                      // Write audit log
         snprintf(status, sizeof(status), "%s %s",
             sortById ? "ID" : "MARK",
             descending ? "DESC" : "ASC");
         audit_log("SORT", NULL, NULL, status);
-
-        /* Display result */
-        showAll();
+ 
+        showAll();                  // Display result
     }
 }
 
