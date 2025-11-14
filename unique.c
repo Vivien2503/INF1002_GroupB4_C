@@ -601,7 +601,7 @@ void sortRecords()
 }
 
 // OPERATION 9: SHOW SUMMARY STATISTICS
-// Calculates total students, average, highest, and lowest marks 
+// Calculates total students, average, highest, and lowest marks
 void showSummary() {
     if (recordCount == 0) {
         printf("No records loaded. Opening database...\n");
