@@ -143,20 +143,8 @@ void openDatabase() {
             break;
         }
 
-        /** CHANGE: normalise spaces/tabs to a single '\t' so both work */
-        char norm[256];
-        int j = 0, inws = 0;
-        for (int i = 0; line[i] && j < (int)sizeof(norm) - 1; ++i) {
-            if (line[i] == ' ' || line[i] == '\t') {
-                if (!inws) { norm[j++] = '\t'; inws = 1; }
-            } else {
-                norm[j++] = line[i];
-                inws = 0;
-            }
-        }
-        norm[j] = '\0';
-
-        readResult = sscanf(norm, "%d\t%[^\t]\t%[^\t]\t%f", // reads the record fields in the order (id>name>prog>mark)
+        /** FIX: Removed whitespace normalization - it was breaking multi-word fields */
+        readResult = sscanf(line, "%d\t%[^\t]\t%[^\t]\t%f", // reads the record fields in the order (id>name>prog>mark)
             &records[recordCount].id,
             records[recordCount].name,
             records[recordCount].programme,
@@ -279,6 +267,9 @@ void queryRecord() {
         printf("ID: %d\nName: %s\nProgramme: %s\nMark: %.2f\n",
             records[pos].id, records[pos].name,
             records[pos].programme, records[pos].mark);
+
+        /** CHANGE: log successful query (FOUND via index) */
+        audit_log("QUERY", NULL, &records[pos], "FOUND");
         return;
     }
 
@@ -291,6 +282,9 @@ void queryRecord() {
                 records[i].id, records[i].name,
                 records[i].programme, records[i].mark);
             found = 1;
+
+            /** CHANGE: log successful query (FOUND via linear scan) */
+            audit_log("QUERY", NULL, &records[i], "FOUND");
             break;
         }
         i = i + 1;
@@ -298,6 +292,9 @@ void queryRecord() {
 
     if (found == 0) {
         printf("Record not found.\n");
+
+        /** CHANGE: log failed query (NOT_FOUND) */
+        audit_log("QUERY", NULL, NULL, "NOT_FOUND");
     }
 }
 
