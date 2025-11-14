@@ -13,6 +13,7 @@
 #define MAX_LINE 512
 #define MAX_ID 64
 #define MAX_NAME 128
+#define FILENAME "Sample-CMS.txt"
 
 typedef struct { char id[MAX_ID]; char name[MAX_NAME]; double mark; } Student;
 
