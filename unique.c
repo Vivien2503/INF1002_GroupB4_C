@@ -1,17 +1,20 @@
+#define _CRT_SECURE_NO_WARNINGS
 /*
-OPERATIONS FILE
- Purpose: Student Database Management System that is able to carry out 7 basic operations
- 
+OPERATIONS FILE (WITH ENHANCEMENTS)
+ Purpose: Student Database Management System that is able to carry out 9 operations
+
  Description:
  - Loads the Database from a text file in tsv format and displays it in a formatted table
-    - Allows user to Insert, Query, Update, Delete records
-    - Saves the modified database back to the text file
+ - Allows user to Insert, Query, Update, Delete records
+ - Sorts records and displays summary statistics
+ - Saves the modified database back to the text file
 */
 
-#define _CRT_SECURE_NO_WARNINGS       /** CHANGE: Allow fopen/scanf on MSVC without warnings */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <time.h>                     /** CHANGE: Needed for audit log timestamps */
+#include <ctype.h>
+#include <time.h>   /** CHANGE: needed for audit timestamps */
 
 #define MAX_RECORDS 100
 #define MAX_NAME_LEN 40
@@ -28,23 +31,19 @@ typedef struct { // database stuff, struct helps to group different data types
 StudentRecord records[MAX_RECORDS];
 int recordCount = 0; // records tracker
 
-/** =========================================================================
- *  CHANGE: Forward declarations for enhancement helpers (audit + fast lookup)
- *  Implementations are at the bottom of this file in the "Enhancement Section".
- *  ========================================================================== */
-void fl_audit_open(void);
-void fl_audit_close(void);
-void fl_audit(const char* op,
-              const StudentRecord* before_or_null,
-              const StudentRecord* after_or_null,
-              const char* status);
+/** CHANGE: forward declarations for enhancement helpers (audit + fast lookup) */
+void audit_open(void);
+void audit_close(void);
+void audit_log(const char* op,
+               const StudentRecord* before_opt,
+               const StudentRecord* after_opt,
+               const char* status);
 
-void fl_index_build(const StudentRecord* records, int count);
-int  fl_index_get(int id, int* out_pos);
-void fl_index_put(int id, int pos);
-void fl_index_rebuild(const StudentRecord* records, int count);
+void index_build(const StudentRecord* recs, int count);
+int  index_get(int id, int* out_pos);
+void index_put(int id, int pos);
+void index_rebuild(const StudentRecord* recs, int count);
 
-/* ============================== Original Interface ============================== */
 void openDatabase();
 void showAll();
 void insertRecord();
@@ -52,6 +51,9 @@ void queryRecord();
 void updateRecord();
 void deleteRecord();
 void saveDatabase();
+void sortRecords();
+void showSummary();
+
 
 void showMenu() {
     printf("\n=== Student Database Management System ===\n");
@@ -62,18 +64,20 @@ void showMenu() {
     printf("5. Update Record\n");
     printf("6. Delete Record\n");
     printf("7. Save Database\n");
-    printf("Enter your choice (1-7): ");
+    printf("8. Sort Records\n");
+    printf("9. Show Summary Statistics\n");
+    printf("Enter your choice (1-9): ");
 }
 
 int main() {
     int choice;
-    
-    /** CHANGE: Open audit log once at program start */
-    fl_audit_open();
-    
+
+    /** CHANGE: open audit file at program start */
+    audit_open();
+
     while (1) { // (1) for infinitely looping menu
         showMenu();
-        if (scanf("%d", &choice) != 1) {              /** CHANGE: basic input guard */
+        if (scanf("%d", &choice) != 1) {          /** CHANGE: basic input guard */
             int ch;
             while ((ch = getchar()) != '\n' && ch != EOF) {}
             continue;
@@ -101,46 +105,45 @@ int main() {
         else if (choice == 7) {
             saveDatabase();
         }
+        else if (choice == 8) {
+            sortRecords();
+        }
+        else if (choice == 9) {
+            showSummary();
+        }
         else {
-            printf("Invalid choice! Please enter a number between 1 and 7.\n");
+            printf("Invalid choice! Please enter a number between 1 and 9.\n");
         }
     }
 
-    /** CHANGE: Currently unreachable, but safe if you add an Exit option later */
-    fl_audit_close();
+    audit_close();  /** CHANGE: currently unreachable, but safe if you add Exit later */
     return 0;
 }
 
-/* OPERATION 1 OPEN DATABASE -> Opens the database file and loads the records
- *
- * CHANGE:
- * - Loader is now tolerant: it reads ALL lines and only accepts rows that parse
- *   into 4 fields (ID, Name, Programme, Mark).
- * - This means your multi-line header from saveDatabase() is handled safely.
- * - After loading, it builds the fast lookup index.
- * - Logs OPEN outcome into audit_log.txt.
- */
+// OPERATION 1 OPEN DATABASE -> Opens the database file and loads the records
 void openDatabase() {
-    FILE *fp;
+    FILE* fp;
     char line[256];
     int readResult;
-    
+
     fp = fopen(FILENAME, "r"); // file pointer
-    
+
     if (fp == NULL) {
         printf("Error opening file!\n"); // error message
-        fl_audit("OPEN", NULL, NULL, "FAIL");      /** CHANGE: audit failure */
+        audit_log("OPEN", NULL, NULL, "FAIL");   /** CHANGE: audit failure */
         return;
     }
-    
+
     recordCount = 0; // clears previous records first before loading
-    
-    while (recordCount < MAX_RECORDS) { // loop continues while max records not reached
+
+    fgets(line, sizeof(line), fp); // skips the first header line
+
+    while (recordCount < MAX_RECORDS) { //loop continues while max records not reached
         if (fgets(line, sizeof(line), fp) == NULL) {
             break;
         }
 
-        /** CHANGE: Accept both tabs and spaces by normalising whitespace */
+        /** CHANGE: normalise spaces/tabs to a single '\t' so both work */
         char norm[256];
         int j = 0, inws = 0;
         for (int i = 0; line[i] && j < (int)sizeof(norm) - 1; ++i) {
@@ -153,39 +156,38 @@ void openDatabase() {
         }
         norm[j] = '\0';
 
-        readResult = sscanf(norm, "%d\t%[^\t]\t%[^\t]\t%f", // reads the record fields
-                   &records[recordCount].id,
-                   records[recordCount].name,
-                   records[recordCount].programme,
-                   &records[recordCount].mark);
-        
-        if (readResult == 4) { // ensures that all fields are properly read
+        readResult = sscanf(norm, "%d\t%[^\t]\t%[^\t]\t%f", // reads the record fields in the order (id>name>prog>mark)
+            &records[recordCount].id,
+            records[recordCount].name,
+            records[recordCount].programme,
+            &records[recordCount].mark);
+
+        if (readResult == 4) { // ensures that all fields are properly read (the 4 variables)
             recordCount = recordCount + 1;
         }
-        /* else: header or malformed line -> ignored */
     }
-    
+
     fclose(fp);
 
-    /** CHANGE: Build fast lookup index after loading */
-    fl_index_build(records, recordCount);
+    /** CHANGE: build fast lookup index after loading */
+    index_build(records, recordCount);
 
     printf("Successfully loaded %d records from '%s'\n\n", recordCount, FILENAME);
-    fl_audit("OPEN", NULL, NULL, "SUCCESS");       /** CHANGE: audit success */
+    audit_log("OPEN", NULL, NULL, "SUCCESS");   /** CHANGE: audit success */
 }
 
 // OPERATION 2 SHOW ALL -> Displays the student records in a formatted table
 void showAll() {
     int i;
-    
+
     printf("\nID\tName\t\tProgramme\t\tMark\n");
     printf("----------------------------------------\n");
-    
+
     i = 0;
     while (i < recordCount) {
         printf("%d\t%-15s\t%-25s\t%.1f\n",
-               records[i].id, records[i].name,
-               records[i].programme, records[i].mark);
+            records[i].id, records[i].name,
+            records[i].programme, records[i].mark);
         i = i + 1;
     }
 }
@@ -196,30 +198,39 @@ void insertRecord() {
     int i;
     int j;
     int duplicate;
-    int pos;                                  /** CHANGE: used with fast lookup */
-    
-    if (recordCount >= MAX_RECORDS) {         /** CHANGE: capacity guard for audit */
-        printf("Error: database full.\n");
-        fl_audit("INSERT", NULL, NULL, "FAIL(FULL)");
-        return;
-    }
+    int pos;   /** CHANGE: used for fast duplicate check */
 
     printf("Enter student ID: ");
     scanf("%d", &newId);
     getchar();
-    
-    /** CHANGE: Use hash index for fast duplicate ID check */
-    if (fl_index_get(newId, &pos)) {
+
+    duplicate = 0;     // check for duplicate ID
+
+    /** CHANGE: use hash index if available */
+    if (index_get(newId, &pos)) {
+        duplicate = 1;
+    } else {
+        i = 0;
+        while (i < recordCount) {
+            if (records[i].id == newId) {
+                duplicate = 1;
+                break;
+            }
+            i = i + 1;
+        }
+    }
+
+    if (duplicate == 1) { // exit and back to menu if duplicate found
         printf("Error: Student ID already exists. Insertion cancelled.\n");
-        fl_audit("INSERT", NULL, NULL, "FAIL(DUPLICATE)");
+        audit_log("INSERT", NULL, NULL, "FAIL(DUPLICATE)");  /** CHANGE */
         return;
     }
-    
+
     records[recordCount].id = newId; // stores new ID to next slot
 
     printf("Enter name: ");
     fgets(records[recordCount].name, MAX_NAME_LEN, stdin);
-    
+
     i = 0; // removal of newline character when user presses enter
     while (records[recordCount].name[i] != '\0') {
         if (records[recordCount].name[i] == '\n') {
@@ -231,7 +242,7 @@ void insertRecord() {
 
     printf("Enter programme: ");
     fgets(records[recordCount].programme, MAX_PROG_LEN, stdin);
-    
+
     i = 0;
     while (records[recordCount].programme[i] != '\0') {
         if (records[recordCount].programme[i] == '\n') {
@@ -244,11 +255,9 @@ void insertRecord() {
     printf("Enter mark: ");
     scanf("%f", &records[recordCount].mark);
 
-    /** CHANGE: Update hash index with new ID -> position mapping */
-    fl_index_put(newId, recordCount);
-
-    /** CHANGE: Audit INSERT with after-state */
-    fl_audit("INSERT", NULL, &records[recordCount], "SUCCESS");
+    /** CHANGE: update index and audit */
+    index_put(newId, recordCount);
+    audit_log("INSERT", NULL, &records[recordCount], "SUCCESS");
 
     recordCount = recordCount + 1; // +1 record count if successful
     printf("Record added successfully!\n");
@@ -259,21 +268,37 @@ void queryRecord() {
     int searchId;
     int i;
     int found;
-    int pos;                                  /** CHANGE: used with fast lookup */
-    
+    int pos;   /** CHANGE */
+
     printf("Enter student ID to search: ");
     scanf("%d", &searchId);
 
-    /** CHANGE: Use hash index instead of linear scan */
-    if (!fl_index_get(searchId, &pos)) {
-        printf("Record not found.\n");
+    /** CHANGE: use fast lookup first */
+    if (index_get(searchId, &pos)) {
+        printf("\nFound Record:\n");
+        printf("ID: %d\nName: %s\nProgramme: %s\nMark: %.2f\n",
+            records[pos].id, records[pos].name,
+            records[pos].programme, records[pos].mark);
         return;
     }
 
-    printf("\nFound Record:\n");
-    printf("ID: %d\nName: %s\nProgramme: %s\nMark: %.2f\n",
-           records[pos].id, records[pos].name,
-           records[pos].programme, records[pos].mark);
+    found = 0;
+    i = 0;
+    while (i < recordCount) { // loop to find matching ID
+        if (records[i].id == searchId) {
+            printf("\nFound Record:\n");
+            printf("ID: %d\nName: %s\nProgramme: %s\nMark: %.2f\n",
+                records[i].id, records[i].name,
+                records[i].programme, records[i].mark);
+            found = 1;
+            break;
+        }
+        i = i + 1;
+    }
+
+    if (found == 0) {
+        printf("Record not found.\n");
+    }
 }
 
 // OPERATION 5 UPDATE RECORD -> Allows the user to update a student record
@@ -284,24 +309,38 @@ void updateRecord() {
     int found;
     char input[MAX_NAME_LEN];
     float newMark;
-    int pos;                                  /** CHANGE: used with fast lookup */
-    
+    int pos;   /** CHANGE */
+
     printf("Enter student ID to update: ");
     scanf("%d", &searchId);
     getchar();
 
-    /** CHANGE: Fast lookup to find the record position */
-    if (!fl_index_get(searchId, &pos)) {
+    found = 0;
+    if (index_get(searchId, &pos)) {
+        found = 1;
+        i = pos;
+    } else {
+        i = 0;
+        while (i < recordCount) {
+            if (records[i].id == searchId) {
+                found = 1;
+                break;
+            }
+            i = i + 1;
+        }
+    }
+
+    if (found == 0) {
         printf("Record not found.\n");
         return;
     }
 
-    /** CHANGE: Snapshot "before" for audit logging */
-    StudentRecord before = records[pos];
+    /** CHANGE: snapshot before for audit */
+    StudentRecord before = records[i];
 
     printf("Enter new name (or press enter to skip): ");
     fgets(input, MAX_NAME_LEN, stdin);
-            
+
     if (input[0] != '\n') { //if user did not press enter, update name
         j = 0;
         while (input[j] != '\0') { //if user pressed enter, remove newline
@@ -311,18 +350,18 @@ void updateRecord() {
             }
             j = j + 1;
         }
-                
+
         j = 0; // copys the new string to the record
         while (input[j] != '\0') {
-            records[pos].name[j] = input[j];
+            records[i].name[j] = input[j];
             j = j + 1;
         }
-        records[pos].name[j] = '\0';
+        records[i].name[j] = '\0';
     }
 
     printf("Enter new programme (or press enter to skip): ");
     fgets(input, MAX_PROG_LEN, stdin);
-            
+
     if (input[0] != '\n') {
         j = 0;
         while (input[j] != '\0') {
@@ -332,26 +371,26 @@ void updateRecord() {
             }
             j = j + 1;
         }
-                
+
         j = 0;
         while (input[j] != '\0') {
-            records[pos].programme[j] = input[j];
+            records[i].programme[j] = input[j];
             j = j + 1;
         }
-        records[pos].programme[j] = '\0';
+        records[i].programme[j] = '\0';
     }
 
     printf("Enter new mark (or -1 to skip): ");
     scanf("%f", &newMark);
-            
+
     if (newMark >= 0) {
-        records[pos].mark = newMark;
+        records[i].mark = newMark;
     }
 
     printf("Record updated successfully.\n");
 
-    /** CHANGE: Audit UPDATE with before/after snapshots */
-    fl_audit("UPDATE", &before, &records[pos], "SUCCESS");
+    /** CHANGE: audit update */
+    audit_log("UPDATE", &before, &records[i], "SUCCESS");
 }
 
 // OPERATION 6 DELETE RECORD -> Allows the user to delete a student record through ID
@@ -361,33 +400,47 @@ void deleteRecord() {
     int j;
     int found;
     char confirm;
-    int pos;                                  /** CHANGE: used with fast lookup */
-    
+    int pos;   /** CHANGE */
+
     printf("Enter student ID to delete: ");
     scanf("%d", &searchId);
 
-    /** CHANGE: Use fast lookup to get record position */
-    if (!fl_index_get(searchId, &pos)) {
+    found = 0;
+    if (index_get(searchId, &pos)) {
+        found = 1;
+        i = pos;
+    } else {
+        i = 0;
+        while (i < recordCount) {
+            if (records[i].id == searchId) { // if ID is found:
+                found = 1;
+                break;
+            }
+            i = i + 1;
+        }
+    }
+
+    if (found == 0) {
         printf("Record not found.\n");
         return;
     }
 
     printf("Are you sure you want to delete this record? (y/n): "); // delete confirmation
     scanf(" %c", &confirm);
-            
-    if (confirm == 'y' || confirm == 'Y') {
-        /** CHANGE: Audit before deletion */
-        fl_audit("DELETE", &records[pos], NULL, "SUCCESS");
 
-        j = pos;
+    if (confirm == 'y' || confirm == 'Y') {
+        /** CHANGE: audit before delete */
+        audit_log("DELETE", &records[i], NULL, "SUCCESS");
+
+        j = i;
         while (j < recordCount - 1) { // shift records after deletion
             records[j] = records[j + 1];
             j = j + 1;
         }
         recordCount = recordCount - 1;
 
-        /** CHANGE: rebuild index because positions changed */
-        fl_index_rebuild(records, recordCount);
+        /** CHANGE: rebuild index after delete */
+        index_rebuild(records, recordCount);
 
         printf("Record deleted successfully.\n");
     }
@@ -398,17 +451,17 @@ void deleteRecord() {
 
 // OPERATION 7 SAVE DATABASE -> Saves current records to the database's .txt file
 void saveDatabase() {
-    FILE *file;
+    FILE* file;
     int i;
-    
+
     file = fopen(FILENAME, "w"); // open file for internal editing
-    
+
     if (file == NULL) {
         printf("Error saving file!\n"); // error message if file cant be opened
-        fl_audit("SAVE", NULL, NULL, "FAIL");       /** CHANGE: audit failure */
+        audit_log("SAVE", NULL, NULL, "FAIL");   /** CHANGE */
         return;
     }
-    
+
     fprintf(file, "Database Name: Sample-CMS\n");
     fprintf(file, "Authors: Assistant Prof Oran Zane Devilly\n");
     fprintf(file, "\n");
@@ -418,135 +471,234 @@ void saveDatabase() {
     i = 0;
     while (i < recordCount) {
         fprintf(file, "%d\t%-15s\t%-23s\t%.1f\n", // fixed formatting to follow sample
-                records[i].id, 
-                records[i].name,
-                records[i].programme, 
-                records[i].mark);
+            records[i].id,
+            records[i].name,
+            records[i].programme,
+            records[i].mark);
         i = i + 1;
     }
-    
+
     fclose(file);
     printf("Database saved successfully.\n");
-    fl_audit("SAVE", NULL, NULL, "SUCCESS");        /** CHANGE: audit success */
+    audit_log("SAVE", NULL, NULL, "SUCCESS");   /** CHANGE */
 }
 
-/* =============================================================================
-   Enhancement Section (kept together at the bottom)
-   - (2) Fast Lookup: open-addressing hash index (ID -> array index)
-   - (1) Audit Log: append-only file with timestamps and before/after snapshots
-   ========================================================================== */
+/* ===== existing helpers for sort & summary ===== */
 
-/** CHANGE: Fast lookup (hash index) implementation */
-#ifndef HSIZE
-#define HSIZE 257  /* prime; fine for <=100 rows */
-#endif
+static int cmp_record_id_asc(const void* a, const void* b) {
+    const StudentRecord* A = a;
+    const StudentRecord* B = b;
+    return (A->id < B->id) ? -1 : (A->id > B->id) ? 1 : 0;
+}
+static int cmp_record_mark_asc(const void* a, const void* b) {
+    const StudentRecord* A = a;
+    const StudentRecord* B = b;
+    return (A->mark < B->mark) ? -1 : (A->mark > B->mark) ? 1 : 0;
+}
+static void reverse_records_inplace(void) {
+    for (int i = 0, j = recordCount - 1; i < j; ++i, --j) {
+        StudentRecord tmp = records[i];
+        records[i] = records[j];
+        records[j] = tmp;
+    }
+}
+static void trim_newline(char* s) {
+    size_t n = strlen(s);
+    while (n && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = '\0';
+}
+static void strtoupper(char* s) { for (; *s; ++s) *s = (char)toupper((unsigned char)*s); }
+
+// Operation 8: SORT -> Sorting of Students Record (ASCENDING/DESCENDING)
+void sortRecords() {
+    if (recordCount == 0) {
+        printf("No records loaded. Opening database...\n");
+        openDatabase();
+        if (recordCount == 0) {
+            return;
+        }
+    }
+    char line[256], up[256];
+    printf("Commands:\n  SHOW ALL SORT BY ID [DESC]\n  SHOW ALL SORT BY MARK [DESC]\n  EXIT\n");
+    while (1) {
+        printf("> ");
+        if (!fgets(line, sizeof line, stdin)) break;
+        trim_newline(line);
+        if (line[0] == '\0') continue;
+        strncpy(up, line, sizeof up - 1); up[sizeof up - 1] = '\0';
+        strtoupper(up);
+        if (strcmp(up, "EXIT") == 0 || strcmp(up, "QUIT") == 0) break;
+        char* pos = strstr(up, "SORT BY");
+        if (!pos) { puts("Unrecognized command. Use 'SHOW ALL SORT BY ID|MARK [DESC]'."); continue; }
+        pos += strlen("SORT BY");
+        while (isspace((unsigned char)*pos)) ++pos;
+        char field[16] = { 0 }, order[16] = { 0 };
+        char* tok = strtok(pos, " \t[]"); if (tok) { strncpy(field, tok, sizeof field - 1); field[sizeof field - 1] = '\0'; }
+        tok = strtok(NULL, " \t[]"); if (tok) { strncpy(order, tok, sizeof order - 1); order[sizeof order - 1] = '\0'; }
+        int byId = (strcmp(field, "ID") == 0);
+        int byMark = (strcmp(field, "MARK") == 0);
+        if (!byId && !byMark) { printf("Unknown sort field '%s'. Use ID or MARK.\n", field); continue; }
+        int desc = (strcmp(order, "DESC") == 0);
+        if (recordCount == 0) { puts("No records to sort."); continue; }
+
+        /* sort the global records array in-place */
+        qsort(records, recordCount, sizeof records[0], byId ? cmp_record_id_asc : cmp_record_mark_asc);
+        if (desc) reverse_records_inplace();
+
+        /** CHANGE: rebuild index after reordering records */
+        index_rebuild(records, recordCount);
+
+        /** CHANGE: audit sort (field + order in status) */
+        char status[32];
+        snprintf(status, sizeof status, "%s %s", byId ? "ID" : "MARK", desc ? "DESC" : "ASC");
+        audit_log("SORT", NULL, NULL, status);
+
+        showAll();
+    }
+}
+
+// OPERATION 9: SHOW SUMMARY STATISTICS
+// Calculates total students, average, highest, and lowest marks 
+void showSummary() {
+    if (recordCount == 0) {
+        printf("No records loaded. Opening database...\n");
+        openDatabase();
+        if (recordCount == 0) {
+            printf("Still no records found.\n");
+            return;
+        }
+    }
+
+    float total = 0;
+    float highest = records[0].mark;
+    float lowest = records[0].mark;
+    int highIndex = 0, lowIndex = 0;
+
+    for (int i = 0; i < recordCount; i++) {
+        total += records[i].mark;
+        if (records[i].mark > highest) {
+            highest = records[i].mark;
+            highIndex = i;
+        }
+        if (records[i].mark < lowest) {
+            lowest = records[i].mark;
+            lowIndex = i;
+        }
+    }
+
+    printf("\n=== Summary Statistics ===\n");
+    printf("Total students: %d\n", recordCount);
+    printf("Average mark: %.2f\n", total / recordCount);
+    printf("Highest mark: %.2f (%s)\n", highest, records[highIndex].name);
+    printf("Lowest mark: %.2f (%s)\n", lowest, records[lowIndex].name);
+
+    /** CHANGE: audit summary execution */
+    audit_log("SUMMARY", NULL, NULL, "SUCCESS");
+}
+
+/* ================= Enhancement Section: fast lookup + audit ============== */
+
+#define HSIZE 257   /** CHANGE: hash table size (prime, > MAX_RECORDS) */
 
 typedef struct {
     int key;
     int pos;
-} FL_Slot;
+} Slot;
 
-static FL_Slot fl_table[HSIZE];
+static Slot indexTable[HSIZE];
 
-static unsigned fl_hmix(unsigned x){
+static unsigned hmix(unsigned x){
     x ^= x >> 16; x *= 0x7feb352d;
     x ^= x >> 15; x *= 0x846ca68b;
     x ^= x >> 16;
     return x;
 }
-static void fl_clear(void){
-    int i;
-    for (i = 0; i < HSIZE; i++) {
-        fl_table[i].key = 0;
-        fl_table[i].pos = -1;
+static void index_clear(void){
+    for (int i=0;i<HSIZE;i++){
+        indexTable[i].key = 0;
+        indexTable[i].pos = -1;
     }
 }
 
-void fl_index_build(const StudentRecord* arr, int count){
-    int i;
-    fl_clear();
-    for (i = 0; i < count; i++) {
-        unsigned h = fl_hmix((unsigned)arr[i].id) % HSIZE;
-        int step;
-        for (step = 0; step < HSIZE; step++, h = (h + 1) % HSIZE) {
-            if (fl_table[h].key == 0 || fl_table[h].key == arr[i].id) {
-                fl_table[h].key = arr[i].id;
-                fl_table[h].pos = i;
+/** CHANGE: build hash index from current records */
+void index_build(const StudentRecord* recs, int count){
+    index_clear();
+    for (int i=0;i<count;i++){
+        unsigned h = hmix((unsigned)recs[i].id) % HSIZE;
+        for (int step=0; step<HSIZE; step++, h=(h+1)%HSIZE){
+            if (indexTable[h].key == 0 || indexTable[h].key == recs[i].id){
+                indexTable[h].key = recs[i].id;
+                indexTable[h].pos = i;
                 break;
             }
         }
     }
 }
 
-int fl_index_get(int id, int* out_pos){
-    unsigned h = fl_hmix((unsigned)id) % HSIZE;
-    int step;
-    for (step = 0; step < HSIZE; step++, h = (h + 1) % HSIZE) {
-        if (fl_table[h].key == 0) return 0;
-        if (fl_table[h].key == id) {
-            if (out_pos) *out_pos = fl_table[h].pos;
+/** CHANGE: lookup ID -> position (returns 1 if found, 0 otherwise) */
+int index_get(int id, int* out_pos){
+    unsigned h = hmix((unsigned)id) % HSIZE;
+    for (int step=0; step<HSIZE; step++, h=(h+1)%HSIZE){
+        if (indexTable[h].key == 0) return 0;
+        if (indexTable[h].key == id){
+            if (out_pos) *out_pos = indexTable[h].pos;
             return 1;
         }
     }
     return 0;
 }
 
-void fl_index_put(int id, int pos){
-    unsigned h = fl_hmix((unsigned)id) % HSIZE;
-    int step;
-    for (step = 0; step < HSIZE; step++, h = (h + 1) % HSIZE) {
-        if (fl_table[h].key == 0 || fl_table[h].key == id) {
-            fl_table[h].key = id;
-            fl_table[h].pos = pos;
+/** CHANGE: insert/overwrite a single ID mapping */
+void index_put(int id, int pos){
+    unsigned h = hmix((unsigned)id) % HSIZE;
+    for (int step=0; step<HSIZE; step++, h=(h+1)%HSIZE){
+        if (indexTable[h].key == 0 || indexTable[h].key == id){
+            indexTable[h].key = id;
+            indexTable[h].pos = pos;
             return;
         }
     }
 }
 
-void fl_index_rebuild(const StudentRecord* arr, int count){
-    fl_index_build(arr, count);
+/** CHANGE: rebuild index after deletes or sorting */
+void index_rebuild(const StudentRecord* recs, int count){
+    index_build(recs, count);
 }
 
-/** CHANGE: Audit log implementation */
-static FILE* fl_audit_fp = NULL;
+/* --------------------------- Audit log --------------------------- */
 
-void fl_audit_open(void){
-    if (!fl_audit_fp) fl_audit_fp = fopen("audit_log.txt","a");
+static FILE* audit_fp = NULL;
+
+void audit_open(void){
+    if (!audit_fp) audit_fp = fopen("audit_log.txt","a");
 }
-
-void fl_audit_close(void){
-    if (fl_audit_fp) {
-        fclose(fl_audit_fp);
-        fl_audit_fp = NULL;
+void audit_close(void){
+    if (audit_fp){
+        fclose(audit_fp);
+        audit_fp = NULL;
     }
 }
-
-static void fl_ts_now(char* buf, size_t n){
+static void ts_now(char* buf, size_t n){
     time_t t = time(NULL);
     struct tm* m = localtime(&t);
     strftime(buf, n, "%Y-%m-%d %H:%M:%S", m);
 }
-
-static void fl_fmt_rec(const StudentRecord* s, char* out, size_t n){
-    if (!s) {
+static void fmt_rec(const StudentRecord* s, char* out, size_t n){
+    if (!s){
         snprintf(out, n, "(null)");
         return;
     }
     snprintf(out, n, "{ID=%d,Name=\"%s\",Programme=\"%s\",Mark=%.2f}",
              s->id, s->name, s->programme, s->mark);
 }
-
-void fl_audit(const char* op,
-              const StudentRecord* before_or_null,
-              const StudentRecord* after_or_null,
-              const char* status){
-    if (!fl_audit_fp) return;
-    {
-        char T[32], B[160], A[160];
-        fl_ts_now(T, sizeof T);
-        fl_fmt_rec(before_or_null, B, sizeof B);
-        fl_fmt_rec(after_or_null,  A, sizeof A);
-        fprintf(fl_audit_fp, "[%s] %s %s -> %s : %s\n", T, op, B, A, status);
-        fflush(fl_audit_fp);
-    }
+void audit_log(const char* op,
+               const StudentRecord* before_opt,
+               const StudentRecord* after_opt,
+               const char* status){
+    if (!audit_fp) return;
+    char T[32], B[160], A[160];
+    ts_now(T, sizeof T);
+    fmt_rec(before_opt, B, sizeof B);
+    fmt_rec(after_opt,  A, sizeof A);
+    fprintf(audit_fp, "[%s] %s %s -> %s : %s\n", T, op, B, A, status);
+    fflush(audit_fp);
 }
