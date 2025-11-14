@@ -506,7 +506,7 @@ static void trim_newline(char* s) {
 static void strtoupper(char* s) { for (; *s; ++s) *s = (char)toupper((unsigned char)*s); }
 
 // Operation 8: Sort Student Records (ASCENDING/DESCENDING)
-void sortRecords()
+void sortRecords() 
 {
     if (recordCount == 0) {
 		printf("No records loaded. Attempting to open database...\n");    //Ensure data is loaded
