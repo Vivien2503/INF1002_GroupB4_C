@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "student_db.h": "c",
+        "stdlib.h": "c"
+    }
+}
