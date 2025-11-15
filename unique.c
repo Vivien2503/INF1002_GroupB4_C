@@ -66,7 +66,8 @@ void showMenu() {
     printf("7. Save Database\n");
     printf("8. Sort Records\n");
     printf("9. Show Summary Statistics\n");
-    printf("Enter your choice (1-9): ");
+    printf("10. Exit Program\n");
+    printf("Enter your choice (1-10): ");
 }
 
 int main() {
@@ -111,12 +112,17 @@ int main() {
         else if (choice == 9) {
             showSummary();
         }
+        else if (choice == 10) {
+            printf("Exiting program. Goodbye!\n");
+            audit_log("EXIT", NULL, NULL, "SUCCESS");
+            break;  // Exit the loop
+        }
         else {
-            printf("Invalid choice! Please enter a number between 1 and 9.\n");
+            printf("Invalid choice! Please enter a number between 1 and 10.\n");
         }
     }
 
-    audit_close();  /** CHANGE: currently unreachable, but safe if you add Exit later */
+    audit_close();  /** CHANGE: now reachable when user exits */
     return 0;
 }
 
